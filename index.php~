@@ -1,0 +1,189 @@
+<?php
+include_once("checkauth.php");
+include_once("dbconnect.php");
+include_once("getQueries.php");
+$_SESSION['curPage']="index.php";
+$_SESSION['referrer']=$_SERVER['PHP_SELF'];
+include("../commons/navBar.php");
+?>
+
+<html>
+<head>
+</head>
+<body>
+<?php
+# Get a players Average Score.
+if (!$userID){
+  
+}
+$query="Select Avg(Round_Scores.Round_Score) FROM (SELECT sum(Strokes) AS Round_Score, Round_ID, rounds.Golfer_ID FROM scores inner join rounds on scores.Round_ID=rounds.ID GROUP BY Round_ID HAVING rounds.Golfer_ID=$userID) Round_Scores";
+# 
+#I could use this construct to save and fetch queries from db.  Undecided.
+#
+$strQuery=getQuery('avg_score');
+eval("\$query=\"$strQuery\"");
+$results = mysql_query($query);
+while($row=mysql_fetch_array($results)) {
+  echo "Average Score: ".round($row[0],2)."</BR>";
+}
+
+#get the number of hit fairways and the number of missed fairways
+$query=<<<fairwayPercentMarker
+SELECT Fairway, COUNT(Fairway) as amt FROM (SELECT Fairway, Strokes, Par FROM scores INNER JOIN rounds ON scores.Round_ID=rounds.ID INNER JOIN holes ON holes.ID=scores.Hole_ID WHERE Par>3 AND Golfer_ID=$userID) as p45scores GROUP BY Fairway
+fairwayPercentMarker;
+$fairwayPercentResults = mysql_query($query);
+while($row=mysql_fetch_array($fairwayPercentResults)){
+  if ($row["Fairway"]==0) $missed = $row["amt"];
+  else if ($row["Fairway"]==1) $hit = $row["amt"];
+}
+$total = $missed+$hit;
+echo "You hit $hit out of $total fairways or ".round($hit*100/$total,2)."%</BR>";
+
+
+$query=<<<fairwayStatsMarker
+SELECT AVG(Strokes-Par) as avg_amt_over FROM (SELECT Fairway, Strokes, Par FROM scores INNER JOIN rounds ON scores.Round_ID=rounds.ID INNER JOIN holes ON holes.ID=scores.Hole_ID WHERE Par>3 AND Golfer_ID=$userID) as p45scores WHERE Fairway=FALSE
+fairwayStatsMarker;
+$missFairwayResults = mysql_query($query) or die(mysql_error());
+$result = mysql_fetch_array($missFairwayResults);
+$amt_ovr_miss=$result['avg_amt_over'];
+echo "Amount over, on average when fairway missed: $result[avg_amt_over]</BR>";
+$query= substr_replace($query,"TRUE ",-5);
+$hitFairwayResults = mysql_query($query);
+$result = mysql_fetch_array($hitFairwayResults);
+$amt_ovr_hit = $result['avg_amt_over'];
+echo "Amount over, on average when fairway hit: $result[avg_amt_over]</BR>";
+
+$query=<<<puttsFairwayMarker
+SELECT Fairway, AVG(Putts) as putts FROM (SELECT Fairway, Putts FROM scores INNER JOIN rounds ON scores.Round_ID=rounds.ID INNER JOIN holes ON holes.ID=scores.Hole_ID WHERE Par>3 AND Golfer_ID=$userID) as p45scores GROUP BY Fairway
+puttsFairwayMarker;
+$results=mysql_query($query);
+while($row=mysql_fetch_array($results)){
+  if ($row["Fairway"]==0) $puttsMissFair=$row["putts"];
+  if ($row["Fairway"]==1) $puttsHitFair=$row["putts"];
+}
+echo "Average number of putts when hit fairway: $puttsHitFair</BR>";
+echo "Average number of putts when miss fairway: $puttsMissFair</BR>";
+$avgPutts=round(($hit*$puttsHitFair+$missed*$puttsMissFair)/$total,2);
+$avgOver=round(($hit*$amt_ovr_hit+$missed*$amt_ovr_miss)/$total,2);
+
+$query=<<<greensFairwayMarker
+SELECT Fairway, SUM(Green_In_Regulation) as greens 
+FROM (SELECT Fairway, Green_In_Regulation FROM scores INNER JOIN rounds ON scores.Round_ID=rounds.ID INNER JOIN holes ON holes.ID=scores.Hole_ID WHERE Par>3 AND Golfer_ID=$userID) as p45scores GROUP BY Fairway 
+greensFairwayMarker;
+$results=mysql_query($query);
+while($row=mysql_fetch_array($results)){
+  if ($row["Fairway"]==0) $greens_fair_missed=round($row["greens"]/$missed,2);
+  if ($row["Fairway"]==1) $greens_fair_hit=round($row["greens"]/$hit,2);
+}
+$greens_fair_total=$greens_fair_missed+$greens_fair_hit;
+
+$query=<<<greensMarker
+SELECT Green_In_Regulation, Count(*) as greens FROM scores INNER JOIN rounds ON scores.Round_ID=rounds.ID INNER JOIN holes ON holes.ID=scores.Hole_ID WHERE Golfer_ID=$userID GROUP BY Green_In_Regulation
+greensMarker;
+$results=mysql_query($query);
+while($row=mysql_fetch_array($results)){
+  if ($row["Green_In_Regulation"]==0) $greens_missed=$row["greens"];
+  if ($row["Green_In_Regulation"]==1) $greens_hit=$row["greens"];
+}
+$greens_total=$greens_missed+$greens_hit;
+$greens_pct=round($greens_hit/$greens_total,2);
+
+echo "You have hit $greens_hit out of $greens_total greens for a success rate of: $greens_pct";
+
+$query=<<<greensMarker
+SELECT Par, (
+  sum( Putts ) / Count( * )
+) AS putts, (
+  sum(Strokes-Par)/Count(*)
+) AS avg_over, (
+  sum( Fairway ) / Count( * )
+) AS fairways, (
+  sum( Green_In_Regulation ) / Count( * )
+) AS greens
+FROM scores
+INNER JOIN rounds ON scores.Round_ID = rounds.ID
+INNER JOIN holes ON holes.ID = scores.Hole_ID
+WHERE Golfer_ID =$userID
+GROUP BY Par
+greensMarker;
+
+$results=mysql_query($query);
+while($row=mysql_fetch_array($results)){
+  $curPar=$row['Par'];
+  $greensByPar[$curPar]=round($row["greens"],2);
+  $fairwaysByPar[$curPar]=round($row["fairways"],2);
+  $puttsByPar[$curPar]=round($row["putts"],2);
+  $avgByPar[$curPar]=round($row["avg_over"],2);
+}
+
+for($i=-2;$i<=3;$i++){
+  for ($j=3;$j<=5;$j++){
+    $score[$i][$j]=0;
+  }
+}
+
+$strQuery=getQuery('scores_by_par');
+eval("\$query=\"$strQuery\";");
+$results = mysql_query($query) or die(mysql_error());
+while($row=mysql_fetch_array($results)) {
+  $curPar=$row['Par'];
+  $curStrokes=$row['over'];
+  $score[$curStrokes][$curPar]=$row['score'];
+}
+
+$strQuery=getQuery('scores_by_handicap');
+eval("\$query=\"$strQuery\";");
+$results = mysql_query($query) or die(mysql_error());
+while($row=mysql_fetch_array($results)) {
+  $curHandicap=$row['Handicap'];
+  $curStrokes=round($row['over'],2);
+  $scoreByHandicap[$curHandicap]=$curStrokes;
+}
+
+$html = <<<tablehtmlmarker
+<table>
+  <tr>
+    <th></th><th>Hit Fairway</th><th>Miss Fairway</th><th>Total</th>
+  </tr>
+  <tr>
+    <th>Count</th><td>$hit</td><td>$missed</td><td>$total</td>
+  </tr>
+  <tr>
+    <th>Avg. Putts</th><td>$puttsHitFair</td><td>$puttsMissFair</td><td>$avgPutts</td>
+  </tr>
+  <tr>
+    <th>Avg. Amount Over</th><td>$amt_ovr_hit</td><td>$amt_ovr_miss</td><td>$avgOver</td>
+  </tr>
+  <tr>
+    <th>% Greens Hit</th><td>$greens_fair_hit</td><td>$greens_fair_missed</td><td>$greens_fair_total</td>
+  </tr>
+</table>
+</br>
+<table>
+  <tr><th></th><th>3</th><th>4</th><th>5</th></tr>
+  <tr><th>Avg Over Par</th><td>$avgByPar[3]</td><td>$avgByPar[4]</td><td>$avgByPar[5]</td></tr>
+  <tr><th>Avg Putts</th><td>$puttsByPar[3]</td><td>$puttsByPar[4]</td><td>$puttsByPar[5]</td></tr>
+  <tr><th>Avg Fairways</th><td>N/A</td><td>$fairwaysByPar[4]</td><td>$fairwaysByPar[5]</td></tr>
+  <tr><th>Avg Greens</th><td>$greensByPar[3]</td><td>$greensByPar[4]</td><td>$greensByPar[5]</td></tr>
+  <tr><th>Number of Eagles</th><td>{$score[-2][3]}</td><td>{$score[-2][4]}</td><td>{$score[-2][5]}</td></tr>
+  <tr><th>Number of Birdies</th><td>{$score[-1][3]}</td><td>{$score[-1][4]}</td><td>{$score[-1][5]}</td></tr>
+  <tr><th>Number of Pars</th><td>{$score[0][3]}</td><td>{$score[0][4]}</td><td>{$score[0][5]}</td></tr>
+  <tr><th>Number of Bogeys</th><td>{$score[1][3]}</td><td>{$score[1][4]}</td><td>{$score[1][5]}</td></tr>
+  <tr><th>Number of Double Bogeys</th><td>{$score[2][3]}</td><td>{$score[2][4]}</td><td>{$score[2][5]}</td></tr>
+  <tr><th>Number of Triple Bogeys</th><td>{$score[3][3]}</td><td>{$score[3][4]}</td><td>{$score[3][5]}</td></tr>
+</table>
+
+tablehtmlmarker;
+echo $html;
+
+echo "<table>
+  <tr><th>Handicap</th><th>Average Score</th></tr>";
+for ($i=1;$i<=18;$i++){
+  echo "<tr><td>$i</td><td>$scoreByHandicap[$i]</td></tr>";
+}
+echo "</table>";
+
+?>
+<input type="hidden" name="referrer" value="../golf/index.php"/>
+</body>
+</html>

@@ -1,0 +1,9 @@
+<?php
+$curPage=$_SESSION['curPage'];
+require_once("checkauth.php");
+require_once("dbconnect.php");
+echo "<div id=\"navBar\">";
+
+echo "<ul><li></li><li></li></ul>";
+echo "</div>";
+?>
